@@ -1,9 +1,12 @@
 package main
 
 import (
-	"context"
+	"bufio"
+	"encoding/json"
 	"fmt"
 	"github.com/pion/ice"
+	"os"
+	"context"
 )
 
 func checkError(err error) {
@@ -50,28 +53,55 @@ func main() {
 	checkError(err)*/
 
 	candidates, err := agent.GetLocalCandidates()
+	iceCandidates, err := newICECandidatesFromICE(candidates)
 	checkError(err)
 
-	for _, c := range candidates {
-		err = agent.AddRemoteCandidate(c)
-		checkError(err)
-	}
+	content, err := json.Marshal(iceCandidates)
+	checkError(err)
 
-	fmt.Printf("%v\n", candidates)
-	//err = agent.AddRemoteCandidate(candidate)
+	fmt.Printf("%s\n", content)
+
+	scanner := bufio.NewScanner(os.Stdin)
+	scanner.Scan()
+	response := scanner.Text()
+
+	var partnerCandidates []ICECandidate
+	err = json.Unmarshal([]byte(response), &partnerCandidates)
+	checkError(err)
 
 	uflag, pass := agent.GetLocalUserCredentials()
 	fmt.Printf("uflag %s pass %s\n", uflag, pass)
 
+	scanner.Scan()
+	partnerUflag := scanner.Text()
+	scanner.Scan()
+	partnerPass := scanner.Text()
+
+
+	for _, c := range partnerCandidates {
+		i, err := c.toICE()
+		checkError(err)
+		err = agent.AddRemoteCandidate(i)
+		checkError(err)
+	}
+	scanner.Scan()
+	mode := scanner.Text()
+
+	var conn *ice.Conn
+	if mode != "" {
+		conn, err = agent.Accept(context.Background(), partnerUflag, partnerPass)
+		conn.Write([]byte("Hello"))
+	} else {
+		conn, err = agent.Dial(context.Background(), partnerUflag, partnerPass)
+		conn.Write([]byte("world"))
+	}
 	checkError(err)
 
 	for {
-		conn, err := agent.Accept(context.Background(), uflag, pass)
-		checkError(err)
-
 		buffer := make([]byte, 100)
 		n, err := conn.Read(buffer)
-		checkError(err);
-		fmt.Printf("Read %v bytes", n)
+		checkError(err)
+		fmt.Printf("\nRead %v bytes\n", n)
+		fmt.Printf(string(buffer))
 	}
 }
