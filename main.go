@@ -7,6 +7,9 @@ import (
 	"fmt"
 	"github.com/gorilla/websocket"
 	"github.com/pion/ice"
+	//"github.com/pion/logging"
+	//"github.com/pion/sctp"
+	"io"
 	"net/url"
 	"os"
 	"strings"
@@ -54,8 +57,6 @@ func main() {
 	agent, err := ice.NewAgent(config)
 	checkError(err)
 
-	var conn *ice.Conn
-
 	err = agent.OnConnectionStateChange(func(state ice.ConnectionState) {
 		fmt.Printf("State Change: %s\n", state.String())
 
@@ -85,6 +86,9 @@ func main() {
 		checkError(err)
 	}()
 
+
+	var conn *ice.Conn
+
 	for {
 		_, res, err := c.ReadMessage()
 		checkError(err)
@@ -109,22 +113,83 @@ func main() {
 			if mode != "" {
 				conn, err = agent.Accept(context.Background(), credentials[0], credentials[1])
 				checkError(err)
-				_, err = conn.Write([]byte("Hello"))
-				checkError(err)
+				//_, err = conn.Write([]byte("Hello"))
+				//checkError(err)
 			} else {
 				conn, err = agent.Dial(context.Background(), credentials[0], credentials[1])
 				checkError(err)
-				_, err = conn.Write([]byte("world"))
-				checkError(err)
+				//_, err = conn.Write([]byte("world"))
+				//checkError(err)
 			}
 
-			for {
+			/*association, err := sctp.Client(sctp.Config{
+				NetConn: conn,
+				LoggerFactory: logging.NewDefaultLoggerFactory(),
+			})
+			checkError(err)
+*/
+			if mode != "" {
+				// conn.Write([]byte("Hello"))
+
+				//stream, err := association.AcceptStream()
+				//checkError(err)
+				f, err := os.Create("/tmp/PhpStorm-2019.1.1-copy.pdf")
+				checkError(err)
+
+				//defer stream.Close()
+				defer  f.Close()
+
+				//time.Sleep(2 * time.Second)
+				n, err := io.Copy(f, conn)
+				checkError(err)
+
+				fmt.Printf("\nRecieve %v bytes\n", n)
+
+			} else {
+				// conn.Write([]byte("world"))
+
+				//stream, err := association.OpenStream(777, sctp.PayloadTypeWebRTCBinary)
+				//checkError(err)
+
+				//f, err := os.Open("/Users/sasha/Downloads/PhpStorm-2019.1.1.dmg")
+				//f, err := os.Open("/Users/sasha/Downloads/abc-1.jpg")
+				f, err := os.Open("/Users/sasha/Downloads/The Social Smart Contract.pdf")
+				checkError(err)
+
+
+				//defer stream.Close()
+				defer  f.Close()
+
+				buffer := make([]byte, 50)//1024 * 2)
+				var n int
+				for {
+					_, err = f.Read(buffer)
+					if err == io.EOF {
+						break
+					}
+					checkError(err)
+					i, err := conn.Write(buffer)
+					n = n + i
+					if err == io.EOF {
+						break
+					}
+					checkError(err)
+				}
+
+				//n, err := io.Copy(conn, f)
+				//checkError(err)
+
+				fmt.Printf("\nSend %v bytes\n", n)
+
+			}
+
+			/*for {
 				buffer := make([]byte, 100)
 				n, err := conn.Read(buffer)
 				checkError(err)
 				fmt.Printf("\nRead %v bytes\n", n)
 				fmt.Printf(string(buffer))
-			}
+			}*/
 		}
 	}
 }
