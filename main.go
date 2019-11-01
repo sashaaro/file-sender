@@ -2,16 +2,16 @@ package main
 
 import (
 	"bufio"
+	"context"
 	"encoding/json"
 	"fmt"
 	"github.com/pion/ice"
-	"strings"
-
-	//"github.com/pion/logging"
-	//"github.com/pion/sctp"
+	"github.com/pion/logging"
+	"github.com/pion/sctp"
 	"io"
 	"os"
-	"context"
+	"strings"
+	"time"
 )
 
 func checkError(err error) {
@@ -26,33 +26,15 @@ type ConnectData struct {
 	Pass string
 }
 
+var useSCTP = true
+
 func main() {
 	reader := bufio.NewReader(os.Stdin)
-	var f *os.File
-
 	uploading := len(os.Args) >= 2
-	if uploading {
-		var err error
-		f, err = os.Open(os.Args[1])
-		checkError(err)
-	} else {
-		for {
-			fmt.Printf("Save to: ")
-
-			filePath, err := reader.ReadString('\n')
-			checkError(err)
-			f, err = os.Create(strings.Trim(filePath, "\n\r"))
-
-			if err == nil {
-				break
-			} else {
-				fmt.Printf(err.Error())
-			}
-		}
-	}
-	defer  f.Close()
 
 	stunUrl, err := ice.ParseURL("stun:stun.l.google.com:19302")
+	candidateSelectionTimeout := 30 * time.Second
+	connectionTimeout := 5 * time.Second
 	config := &ice.AgentConfig{
 		Urls: []*ice.URL{stunUrl},
 		NetworkTypes: []ice.NetworkType{
@@ -65,6 +47,8 @@ func main() {
 			ice.CandidateTypePeerReflexive,
 			ice.CandidateTypeRelay,
 		},
+		CandidateSelectionTimeout: &candidateSelectionTimeout,
+		ConnectionTimeout: &connectionTimeout,
 	}
 
 	agent, err := ice.NewAgent(config)
@@ -111,31 +95,73 @@ func main() {
 
 	var conn *ice.Conn
 	if uploading {
-		conn, err = agent.Accept(context.Background(), connectData.Uflag, connectData.Pass)
-	} else {
 		conn, err = agent.Dial(context.Background(), connectData.Uflag, connectData.Pass)
+	} else {
+		conn, err = agent.Accept(context.Background(), connectData.Uflag, connectData.Pass)
 	}
 	checkError(err)
 
 	defer conn.Close()
-	/*association, err := sctp.Client(sctp.Config{
-		NetConn: conn,
-		LoggerFactory: logging.NewDefaultLoggerFactory(),
-	})
-	checkError(err)*/
 
+	var connIO io.ReadWriter
+
+	if useSCTP {
+		association, err := sctp.Client(sctp.Config{
+			NetConn: conn,
+			LoggerFactory: logging.NewDefaultLoggerFactory(),
+		})
+		checkError(err)
+
+		var stream *sctp.Stream
+		if uploading {
+			stream, err = association.OpenStream(777, sctp.PayloadTypeWebRTCBinary)
+		} else {
+			stream, err = association.AcceptStream()
+		}
+		checkError(err)
+
+		defer stream.Close()
+
+		connIO = stream
+	} else {
+		connIO = conn
+	}
+
+	var f *os.File
 	if uploading {
-		//stream, err := association.OpenStream(777, sctp.PayloadTypeWebRTCBinary)
-		//checkError(err)
+		var err error
+		f, err = os.Open(os.Args[1])
+		checkError(err)
+	} else {
+		for {
+			fmt.Printf("Save to: ")
 
-		n, err := io.CopyBuffer(conn, f, make([]byte, 1200))
+			filePath, err := reader.ReadString('\n')
+			checkError(err)
+			f, err = os.Create(strings.Trim(filePath, "\n\r"))
+
+			if err == nil {
+				break
+			} else {
+				fmt.Printf(err.Error())
+			}
+		}
+	}
+	defer  f.Close()
+	
+	if uploading {
+		var n int64
+		if useSCTP {
+			n, err = io.Copy(connIO, f)
+		} else {
+			//n, err := io.CopyBuffer(conn, f, make([]byte, 1200))
+			n, err = io.CopyBuffer(connIO, f, make([]byte, 5 * 1200))
+		}
 		checkError(err)
 
 		fmt.Printf("Success %v bytes sent!\n", n)
 	} else {
-		//stream, err := association.AcceptStream()
-		//checkError(err)
-		_, err = io.Copy(f, conn)
+		_, err = io.Copy(f, connIO)
 		checkError(err)
 
 		fmt.Printf("Saved!\n")
