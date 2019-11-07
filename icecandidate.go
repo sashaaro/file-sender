@@ -150,6 +150,15 @@ type ICECandidate struct {
 	RelatedPort    uint16           `json:"relatedPort"`
 }
 
+
+// ICECandidateInit is used to serialize ice candidates
+type ICECandidateInit struct {
+	Candidate        string  `json:"candidate"`
+	SDPMid           *string `json:"sdpMid,omitempty"`
+	SDPMLineIndex    *uint16 `json:"sdpMLineIndex,omitempty"`
+	UsernameFragment string  `json:"usernameFragment"`
+}
+
 // Conversion for package ice
 
 func newICECandidatesFromICE(iceCandidates []ice.Candidate) ([]ICECandidate, error) {
@@ -280,14 +289,6 @@ func iceCandidateToSDP(c ICECandidate) sdp.ICECandidate {
 		RelatedAddress: c.RelatedAddress,
 		RelatedPort:    c.RelatedPort,
 	}
-}
-
-// ICECandidateInit is used to serialize ice candidates
-type ICECandidateInit struct {
-	Candidate        string  `json:"candidate"`
-	SDPMid           *string `json:"sdpMid,omitempty"`
-	SDPMLineIndex    *uint16 `json:"sdpMLineIndex,omitempty"`
-	UsernameFragment string  `json:"usernameFragment"`
 }
 
 // ToJSON returns an ICECandidateInit

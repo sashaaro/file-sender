@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/gorilla/websocket"
 	"github.com/pion/ice"
 	"github.com/pion/logging"
 	"github.com/pion/sctp"
@@ -20,7 +21,7 @@ func checkError(err error) {
 	}
 }
 
-type ConnectData struct {
+type ExchangeData struct {
 	Candidates []ICECandidate
 	Uflag string
 	Pass string
@@ -28,9 +29,52 @@ type ConnectData struct {
 
 var useSCTP = true
 
+var webSocketUrl = "ws://localhost:8443/ws"
+
+func exchangeSocket(data ExchangeData) *ExchangeData {
+	c, _, err := websocket.DefaultDialer.Dial(webSocketUrl, nil)
+	checkError(err)
+
+	err = c.WriteJSON(data)
+	checkError(err)
+
+	partnerData := &ExchangeData{}
+	err = c.ReadJSON(partnerData)
+	checkError(err)
+
+	return partnerData
+}
+
+func exchangeMannualy(data ExchangeData) *ExchangeData {
+	myConnectDataJson, err := json.Marshal(data)
+	checkError(err)
+	fmt.Printf("Candidates:\n%s\n", myConnectDataJson)
+	//connectDataJson = base64.StdEncoding.EncodeToString(connectDataJson)
+	connectDataJson, err := bufio.NewReader(os.Stdin).ReadString('\n')
+	checkError(err)
+
+	partnerData := &ExchangeData{}
+	err = json.Unmarshal([]byte(connectDataJson), partnerData)
+	checkError(err)
+
+	return partnerData
+}
+
+var exchange = exchangeSocket
+
 func main() {
 	reader := bufio.NewReader(os.Stdin)
-	uploading := len(os.Args) >= 2
+	args := os.Args[1:]
+
+	var uploadingFile string
+	if len(args) == 1 {
+		if args[0] == "server" {
+			signalingServer()
+			return
+		} else {
+			uploadingFile = args[0]
+		}
+	}
 
 	stunUrl, err := ice.ParseURL("stun:stun.l.google.com:19302")
 	candidateSelectionTimeout := 30 * time.Second
@@ -54,38 +98,24 @@ func main() {
 	agent, err := ice.NewAgent(config)
 	checkError(err)
 
+	defer agent.Close()
+
 	err = agent.OnConnectionStateChange(func(state ice.ConnectionState) {
 		fmt.Printf("State Change: %s\n", state.String())
-
-		if state == ice.ConnectionStateConnected {
-			fmt.Printf("Connected!\n")
-		}
 	})
 
 	myCandidates, err := agent.GetLocalCandidates()
 	myIceCandidates, err := newICECandidatesFromICE(myCandidates)
 	checkError(err)
 	uflag, pass := agent.GetLocalUserCredentials()
-	myConnectData := &ConnectData{
+
+	partnerData := exchange(ExchangeData{
 		Candidates: myIceCandidates,
 		Uflag: uflag,
 		Pass: pass,
-	}
-	myConnectDataJson, err := json.Marshal(myConnectData)
-	checkError(err)
+	})
 
-	fmt.Printf("Candidates:\n%s\n", myConnectDataJson)
-	//connectDataJson = base64.StdEncoding.EncodeToString(connectDataJson)
-
-
-	connectDataJson, err := reader.ReadString('\n')
-	checkError(err)
-
-	connectData := &ConnectData{}
-	err = json.Unmarshal([]byte(connectDataJson), connectData)
-	checkError(err)
-
-	for _, c := range connectData.Candidates {
+	for _, c := range partnerData.Candidates {
 		i, err := c.toICE()
 		checkError(err)
 
@@ -93,44 +123,13 @@ func main() {
 		checkError(err)
 	}
 
-	var conn *ice.Conn
-	if uploading {
-		conn, err = agent.Dial(context.Background(), connectData.Uflag, connectData.Pass)
-	} else {
-		conn, err = agent.Accept(context.Background(), connectData.Uflag, connectData.Pass)
-	}
-	checkError(err)
-
-	defer conn.Close()
-
-	var connIO io.ReadWriter
-
-	if useSCTP {
-		association, err := sctp.Client(sctp.Config{
-			NetConn: conn,
-			LoggerFactory: logging.NewDefaultLoggerFactory(),
-		})
-		checkError(err)
-
-		var stream *sctp.Stream
-		if uploading {
-			stream, err = association.OpenStream(777, sctp.PayloadTypeWebRTCBinary)
-		} else {
-			stream, err = association.AcceptStream()
-		}
-		checkError(err)
-
-		defer stream.Close()
-
-		connIO = stream
-	} else {
-		connIO = conn
-	}
 
 	var f *os.File
-	if uploading {
+	if uploadingFile != "" {
+		fmt.Printf("Uploading %s\n", uploadingFile)
+
 		var err error
-		f, err = os.Open(os.Args[1])
+		f, err = os.Open(uploadingFile)
 		checkError(err)
 	} else {
 		for {
@@ -147,9 +146,52 @@ func main() {
 			}
 		}
 	}
-	defer  f.Close()
-	
-	if uploading {
+	defer f.Close()
+
+
+	var conn *ice.Conn
+	if uploadingFile != "" {
+		conn, err = agent.Dial(context.Background(), partnerData.Uflag, partnerData.Pass)
+	} else {
+		conn, err = agent.Accept(context.Background(), partnerData.Uflag, partnerData.Pass)
+	}
+	checkError(err)
+	defer conn.Close()
+
+
+	var connIO io.ReadWriter
+	if useSCTP {
+		association, err := sctp.Client(sctp.Config{
+			NetConn: conn,
+			LoggerFactory: logging.NewDefaultLoggerFactory(),
+		})
+		checkError(err)
+
+		defer association.Close()
+
+		var stream *sctp.Stream
+		if uploadingFile != "" {
+			stream, err = association.OpenStream(777, sctp.PayloadTypeWebRTCBinary)
+		} else {
+			stream, err = association.AcceptStream()
+		}
+		checkError(err)
+
+		defer stream.Close()
+
+		connIO = stream
+	} else {
+		connIO = conn
+	}
+
+	if uploadingFile != "" {
+		time.Sleep(5 * time.Second)
+		fmt.Printf("Uploading....\n")
+	} else {
+		fmt.Printf("Downloading....\n")
+	}
+
+	if uploadingFile != "" {
 		var n int64
 		if useSCTP {
 			n, err = io.Copy(connIO, f)
