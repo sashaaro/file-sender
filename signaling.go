@@ -17,7 +17,7 @@ func signalingServer()  {
 
 	http.HandleFunc("/ws", func(writer http.ResponseWriter, request *http.Request) {
 		socket, err := upgrader.Upgrade(writer, request, nil)
-		if err != nil {
+		if err != nil && err != io.EOF {
 			log.Println(err)
 			return
 		}

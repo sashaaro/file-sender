@@ -1,4 +1,4 @@
 ```
-    xxd -s 40000000 -l 100 traefik
+    xxd -s 40000000 -l 100 somefile
     
-    sha256sum traefik
+    sha256sum somefile
