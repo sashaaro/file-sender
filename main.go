@@ -27,11 +27,13 @@ type ExchangeData struct {
 	Pass string
 }
 
-var useSCTP = false
+var useSCTP = true
 
 var webSocketUrl = "ws://localhost:8443/ws"
+
 var stun = "stun:127.0.0.1:3478"
 //var stun = "stun:stun.l.google.com:19302"
+
 func exchangeSocket(data ExchangeData) *ExchangeData {
 	c, _, err := websocket.DefaultDialer.Dial(webSocketUrl, nil)
 	checkError(err)
@@ -62,6 +64,7 @@ func exchangeMannualy(data ExchangeData) *ExchangeData {
 }
 
 var exchange = exchangeSocket
+// var exchange = exchangeMannualy
 
 func main() {
 	reader := bufio.NewReader(os.Stdin)
