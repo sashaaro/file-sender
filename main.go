@@ -48,7 +48,7 @@ func exchangeSocket(data ExchangeData) *ExchangeData {
 	return partnerData
 }
 
-func exchangeMannualy(data ExchangeData) *ExchangeData {
+func exchangeManually(data ExchangeData) *ExchangeData {
 	myConnectDataJson, err := json.Marshal(data)
 	checkError(err)
 	fmt.Printf("Candidates:\n%s\n", myConnectDataJson)
@@ -64,7 +64,7 @@ func exchangeMannualy(data ExchangeData) *ExchangeData {
 }
 
 var exchange = exchangeSocket
-// var exchange = exchangeMannualy
+//var exchange = exchangeManually
 
 func main() {
 	reader := bufio.NewReader(os.Stdin)

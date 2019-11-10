@@ -1,4 +1,4 @@
-module github.com/sashaaro/ice
+module github.com/sashaaro/file-sender
 
 go 1.12
 
