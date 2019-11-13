@@ -10,6 +10,7 @@ import (
 	"github.com/pion/logging"
 	"github.com/pion/sctp"
 	"io"
+	"net"
 	"os"
 	"strings"
 	"time"
@@ -27,12 +28,16 @@ type ExchangeData struct {
 	Pass string
 }
 
-var useSCTP = true
+//var transport = "tcp"
+//var transport = "ice"
+// var transport = "sctp"
+var transport = "udp"
 
-var webSocketUrl = "ws://localhost:8443/ws"
+//var webSocketUrl = "ws://localhost:8443/ws"
+var webSocketUrl = "ws://botenza.com:8443/ws"
 
-var stun = "stun:127.0.0.1:3478"
-//var stun = "stun:stun.l.google.com:19302"
+//var stun = "stun:127.0.0.1:3478"
+var stun = "stun:stun.l.google.com:19302"
 
 func exchangeSocket(data ExchangeData) *ExchangeData {
 	c, _, err := websocket.DefaultDialer.Dial(webSocketUrl, nil)
@@ -104,110 +109,139 @@ func main() {
 	}
 	defer f.Close()
 
-	stunUrl, err := ice.ParseURL(stun)
-	candidateSelectionTimeout := 30 * time.Second
-	connectionTimeout := 5 * time.Second
-	config := &ice.AgentConfig{
-		Urls: []*ice.URL{stunUrl},
-		NetworkTypes: []ice.NetworkType{
-			ice.NetworkTypeUDP4,
-			ice.NetworkTypeTCP4,
-		},
-		CandidateTypes: []ice.CandidateType{
-			ice.CandidateTypeHost,
-			ice.CandidateTypeServerReflexive,
-			ice.CandidateTypePeerReflexive,
-			ice.CandidateTypeRelay,
-		},
-		CandidateSelectionTimeout: &candidateSelectionTimeout,
-		ConnectionTimeout: &connectionTimeout,
-	}
-
-	agent, err := ice.NewAgent(config)
-	checkError(err)
-
-	defer agent.Close()
-
 	var connIO io.ReadWriteCloser
-	err = agent.OnConnectionStateChange(func(state ice.ConnectionState) {
-		fmt.Printf("State Change: %s\n", state.String())
-		if state == ice.ConnectionStateDisconnected {
-			if connIO != nil {
-				err := connIO.Close()
-				checkError(err)
+	if transport == "tcp" {
+		uploaderAddr, err := net.ResolveTCPAddr("tcp", "localhost:8888")
+		if uploadingFile != "" {
+			time.Sleep(2 * time.Second)
+			connIO, err = net.Dial("tcp", uploaderAddr.String())
+			checkError(err)
+		} else {
+			listener, err := net.ListenTCP("tcp", uploaderAddr)
+			checkError(err)
+			fmt.Printf("Listening tcp....\n")
+			conn, err := listener.Accept()
+			checkError(err)
+			connIO = conn
+		}
+	} else if transport == "udp" {
+		uploaderAddr, err := net.ResolveUDPAddr("udp", "localhost:8888")
+		if uploadingFile != "" {
+			time.Sleep(2 * time.Second)
+			connIO, err = net.Dial("udp", uploaderAddr.String())
+			checkError(err)
+		} else {
+			listener, err := net.ListenUDP("udp", uploaderAddr)
+			checkError(err)
+			fmt.Printf("Listening udp....\n")
+			checkError(err)
+			connIO = listener
+		}
+	} else {
+		stunUrl, err := ice.ParseURL(stun)
+		candidateSelectionTimeout := 30 * time.Second
+		connectionTimeout := 5 * time.Second
+		config := &ice.AgentConfig{
+			Urls: []*ice.URL{stunUrl},
+			NetworkTypes: []ice.NetworkType{
+				ice.NetworkTypeUDP4,
+				ice.NetworkTypeTCP4,
+			},
+			CandidateTypes: []ice.CandidateType{
+				ice.CandidateTypeHost,
+				ice.CandidateTypeServerReflexive,
+				ice.CandidateTypePeerReflexive,
+				ice.CandidateTypeRelay,
+			},
+			CandidateSelectionTimeout: &candidateSelectionTimeout,
+			ConnectionTimeout: &connectionTimeout,
+		}
+
+		agent, err := ice.NewAgent(config)
+		checkError(err)
+
+		defer agent.Close()
+
+		err = agent.OnConnectionStateChange(func(state ice.ConnectionState) {
+			fmt.Printf("State Change: %s\n", state.String())
+			if state == ice.ConnectionStateDisconnected {
+				if connIO != nil {
+					err := connIO.Close()
+					checkError(err)
+				}
 			}
+		})
+
+		myCandidates, err := agent.GetLocalCandidates()
+		myIceCandidates, err := newICECandidatesFromICE(myCandidates)
+		checkError(err)
+		uflag, pass := agent.GetLocalUserCredentials()
+
+		partnerData := exchange(ExchangeData{
+			Candidates: myIceCandidates,
+			Uflag: uflag,
+			Pass: pass,
+		})
+
+		for _, c := range partnerData.Candidates {
+			i, err := c.toICE()
+			checkError(err)
+
+			err = agent.AddRemoteCandidate(i)
+			checkError(err)
 		}
-	})
 
-	myCandidates, err := agent.GetLocalCandidates()
-	myIceCandidates, err := newICECandidatesFromICE(myCandidates)
-	checkError(err)
-	uflag, pass := agent.GetLocalUserCredentials()
-
-	partnerData := exchange(ExchangeData{
-		Candidates: myIceCandidates,
-		Uflag: uflag,
-		Pass: pass,
-	})
-
-	for _, c := range partnerData.Candidates {
-		i, err := c.toICE()
-		checkError(err)
-
-		err = agent.AddRemoteCandidate(i)
-		checkError(err)
-	}
-
-	var conn *ice.Conn
-	if uploadingFile != "" {
-		conn, err = agent.Accept(context.Background(), partnerData.Uflag, partnerData.Pass)
-	} else {
-		conn, err = agent.Dial(context.Background(), partnerData.Uflag, partnerData.Pass)
-	}
-	checkError(err)
-	defer conn.Close()
-
-	go func() {
+		var conn *ice.Conn
 		if uploadingFile != "" {
-			conn.Write([]byte("hello"))
+			conn, err = agent.Accept(context.Background(), partnerData.Uflag, partnerData.Pass)
 		} else {
-			conn.Write([]byte("world"))
-		}
-	}()
-
-	buffer := make([]byte, 32 * 1000)
-	conn.Read(buffer)
-
-	fmt.Printf("Receive msg: %s\n", string(buffer))
-
-	if useSCTP {
-		var association *sctp.Association
-		config := sctp.Config{
-			NetConn: conn,
-			LoggerFactory: logging.NewDefaultLoggerFactory(),
-			MaxReceiveBufferSize: 10 * 1024 * 1024,
-		}
-		if uploadingFile != "" {
-			association, err = sctp.Client(config)
-		} else {
-			association, err = sctp.Server(config)
+			conn, err = agent.Dial(context.Background(), partnerData.Uflag, partnerData.Pass)
 		}
 		checkError(err)
-		defer association.Close()
+		defer conn.Close()
 
-		var stream *sctp.Stream
-		if uploadingFile != "" {
-			stream, err = association.OpenStream(777, sctp.PayloadTypeWebRTCBinary)
+		go func() {
+			if uploadingFile != "" {
+				conn.Write([]byte("hello"))
+			} else {
+				conn.Write([]byte("world"))
+			}
+		}()
+
+		buffer := make([]byte, 32 * 1000)
+		conn.Read(buffer)
+		fmt.Printf("Receive msg: %s\n", string(buffer))
+
+
+		if transport == "sctp" {
+			var association *sctp.Association
+			config := sctp.Config{
+				NetConn: conn,
+				LoggerFactory: logging.NewDefaultLoggerFactory(),
+				MaxReceiveBufferSize: 10 * 1024 * 1024,
+			}
+			if uploadingFile != "" {
+				association, err = sctp.Client(config)
+			} else {
+				association, err = sctp.Server(config)
+			}
+			checkError(err)
+			defer association.Close()
+
+			var stream *sctp.Stream
+			if uploadingFile != "" {
+				stream, err = association.OpenStream(777, sctp.PayloadTypeWebRTCBinary)
+			} else {
+				stream, err = association.AcceptStream()
+			}
+			checkError(err)
+
+			defer stream.Close()
+
+			connIO = stream
 		} else {
-			stream, err = association.AcceptStream()
+			connIO = conn
 		}
-		checkError(err)
-
-		defer stream.Close()
-
-		connIO = stream
-	} else {
-		connIO = conn
 	}
 
 	if uploadingFile != "" {
@@ -219,12 +253,13 @@ func main() {
 
 	if uploadingFile != "" {
 		var n int64
-		if useSCTP {
-			n, err = io.Copy(connIO, f)
+		var err error
+		if transport == "ice" || transport == "sctp" {
+			n, err = io.CopyBuffer(connIO, f, make([]byte, 5 * 1200))
 			//n = copy(connIO, f)
 		} else {
+			n, err = io.Copy(connIO, f)
 			//n = copy(connIO, f)
-			n, err = io.CopyBuffer(connIO, f, make([]byte, 5 * 1200))
 		}
 		checkError(err)
 
